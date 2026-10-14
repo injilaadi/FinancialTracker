@@ -5,7 +5,6 @@ Tracking my finances and categorizing where my money goes across all my bank acc
 Upload a bank-statement CSV; each transaction is categorized automatically (rules baseline now, trained
 ML model next), stored in PostgreSQL, and summarized in a dashboard of spending by category and month.
 
-> **Status:** early build (Day 1 scaffold). Numbers in the results table below are filled in only after they are measured.
 
 ## Architecture
 
@@ -13,7 +12,7 @@ ML model next), stored in PostgreSQL, and summarized in a dashboard of spending 
 CSV upload -> FastAPI api (asyncpg) --batches--> Python ML service (FastAPI) --> category per description
                   |
                   +--> PostgreSQL (transactions, categories, budgets)
-                  +--> Redis (planned: dashboard cache, rate limiting)
+                  +--> Redis ( dashboard cache, rate limiting)
 ```
 
 | Service | Tech | Port |
@@ -24,6 +23,8 @@ CSV upload -> FastAPI api (asyncpg) --batches--> Python ML service (FastAPI) -->
 | `redis`| Redis 7 | 6379 |
 
 ## Quickstart
+
+Demo: https://financial-tracker-git-main-injila-adil-s-projects.vercel.app/
 
 ```bash
 docker compose up --build          # first run loads db/init.sql
@@ -137,16 +138,6 @@ The browser only talks to `/api/*`. In Docker, nginx forwards that to the `api` 
 Vite does (set `API_URL` to point somewhere other than `http://localhost:8080`). Charts are hand-written SVG,
 every chart has a table view, and light and dark themes follow your system setting. Category colors are fixed per
 category, so switching months doesn't repaint them.
-
-## Roadmap
-
-- [x] Schema, Compose stack, FastAPI api skeleton, CSV import, ML service with rules baseline, CI
-- [x] Hand-labeled test set (kept private) and baseline measurement
-- [x] scikit-learn categorizer (TF-IDF + logistic regression) trained on a public dataset
-- [x] Hand-written analytics SQL, indexes, materialized view, `EXPLAIN ANALYZE` timings
-- [x] Redis cache for dashboard aggregates
-- [x] React + TypeScript dashboard
-- [ ] Stretch: forecasting, PyTorch categorizer comparison, Kubernetes (Helm, HPA)
 
 ## Data and privacy
 
