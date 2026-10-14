@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  api-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: financetracker_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/financetracker_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      - run: pytest
+
+  ml-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ml
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      - run: pytest
+
+  compose-smoke-test:
+    needs: [api-test, ml-test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and start the full stack
+        run: docker compose up -d --build --wait
+
+      - name: Health checks
+        run: |
+          curl --fail http://localhost:8080/healthz
+          curl --fail http://localhost:8001/healthz
+
+      - name: Import a small CSV end to end
+        run: |
+          printf 'date,description,amount\n2026-10-01,SHELL OIL 5521,-40.25\n2026-10-02,UBER EATS ORDER 1,-18.00\n' > /tmp/sample.csv
+          curl --fail -s -F file=@/tmp/sample.csv http://localhost:8080/import | tee /tmp/import.json
+          python3 -c "import json; d = json.load(open('/tmp/import.json')); assert d['imported'] == 2 and d['categorized'] == 2, d"
+          curl --fail -s http://localhost:8080/transactions | python3 -c "import json, sys; t = json.load(sys.stdin); assert {x['category'] for x in t} == {'Gas', 'Dining'}, t"
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
