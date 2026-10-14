@@ -4,6 +4,9 @@
 # PRIVATE financial data: never commit real statements or your labeled test set
 data/private/
 
+# downloaded public datasets (check each license before redistributing)
+data/public/*.csv
+
 # python
 __pycache__/
 .venv/

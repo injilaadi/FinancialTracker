@@ -1,0 +1,314 @@
+"""Generate a hand-written seed training set of US merchants -> our 13 categories.
+
+The merchant lists below are written by hand (not scraped, not from any statement). Each
+merchant is expanded into several realistic statement-style descriptors (store numbers, city,
+state, SQ*/TST* prefixes, POS noise) with a fixed random seed, so output is reproducible.
+
+IMPORTANT: merchants that appear in your own labeled test set must NOT be in the seed, or
+the test stops measuring generalization. Pass --check to fail if any overlap exists:
+
+  python make_seed.py --out ../data/seed/seed_merchants.csv --check ../data/private/labeled.csv
+"""
+import argparse
+import csv
+import random
+import re
+import sys
+
+from convert_labels import CATEGORIES
+
+MERCHANTS: dict[str, list[str]] = {
+    "Groceries": [
+        "WHOLE FOODS MKT", "TRADER JOE'S", "SAFEWAY", "KROGER", "ALBERTSONS", "VONS", "SPROUTS FARMERS MKT",
+        "ALDI", "99 RANCH MARKET", "H MART", "MITSUWA MARKETPLACE", "SMART & FINAL", "FOOD 4 LESS",
+        "STATER BROS", "GELSON'S", "INSTACART", "COSTCO WHSE", "PUBLIX", "HEB", "WINCO FOODS",
+        "GROCERY OUTLET", "LUCKY SUPERMARKET", "RALEY'S", "FRESH & EASY", "ZION MARKET", "NIJIYA MARKET",
+        "WEGMANS", "GIANT EAGLE", "MEIJER", "FRED MEYER", "TARGET GROCERY PICKUP", "WALMART GROCERY",
+        "SEAFOOD CITY", "TAWA SUPERMARKET", "EL SUPER", "CARDENAS MARKETS", "VALLARTA SUPERMARKETS",
+    ],
+    "Dining": [
+        "MCDONALD'S", "BURGER KING", "WENDY'S", "IN-N-OUT BURGER", "CHIPOTLE", "PANDA EXPRESS", "PANERA BREAD",
+        "JACK IN THE BOX", "FIVE GUYS", "SHAKE SHACK", "CHEESECAKE FACTORY", "OLIVE GARDEN", "CHILI'S",
+        "APPLEBEE'S", "DENNY'S", "IHOP", "DUNKIN", "PEET'S COFFEE", "BLUE BOTTLE COFFEE", "PHILZ COFFEE",
+        "KUNG FU TEA", "SHARETEA", "TIGER SUGAR", "GONG CHA", "DOORDASH", "UBER EATS", "GRUBHUB",
+        "PIZZA HUT", "DOMINO'S", "PAPA JOHN'S", "LITTLE CAESARS", "KFC", "POPEYES", "CARL'S JR",
+        "DEL TACO", "EL POLLO LOCO", "RAISING CANE'S", "HABIT BURGER", "JERSEY MIKE'S", "JIMMY JOHN'S",
+        "PINKBERRY", "COLD STONE CREAMERY", "BASKIN ROBBINS", "DUTCH BROS", "KURA SUSHI", "SUSHIRO",
+        "MENDOCINO FARMS", "SWEETGREEN", "CAVA", "WINGSTOP", "BUFFALO WILD WINGS", "ROUND TABLE PIZZA",
+        "TEAPRESSO", "BOBA GUYS", "LA COLOMBE", "CORNER BAKERY", "PANCHEROS", "MOD PIZZA", "BLAZE PIZZA",
+        "NOODLES & COMPANY", "TACO BUENO", "SONIC DRIVE IN", "ARBY'S", "WHATABURGER", "CULVER'S",
+        "TEN REN'S TEA", "7 LEAVES CAFE", "BOILING POINT", "HAIDILAO HOT POT", "KOREAN BBQ HOUSE",
+        "THAI KITCHEN", "RAMEN HOUSE", "SUSHI GARDEN", "TACOS EL GORDO", "PHO 79", "CURRY HOUSE",
+        "GRILL & BAR", "BAKERY CAFE", "DONUT SHOP", "BBQ SMOKEHOUSE", "DELI & MARKET LUNCH",
+    ],
+    "Transport": [
+        "UBER TRIP", "LYFT RIDE", "METROLINK", "OCTA BUS PASS", "BART CLIPPER", "CLIPPER CARD", "LA METRO TAP",
+        "ZIPCAR", "LIME SCOOTER", "BIRD RIDE", "FASTRAK TOLL", "SPOTHERO PARKING", "PARKMOBILE",
+        "CITY PARKING METER", "PARKING GARAGE", "AIRPORT PARKING", "WAYMO RIDE", "AMTRAK TICKET",
+        "MTA SUBWAY FARE", "CTA TRANSIT", "KING COUNTY METRO", "MUNI MOBILE", "VTA TRANSIT", "TURO CAR RENTAL",
+        "THE TOLL ROADS", "EZPASS", "SUNPASS", "LAZ PARKING", "SP PLUS PARKING", "DMV VEHICLE REGISTRATION",
+        "JIFFY LUBE", "VALVOLINE OIL CHANGE", "MIDAS AUTO", "TIRE KINGDOM", "AUTOZONE", "O'REILLY AUTO PARTS",
+    ],
+    "Gas": [
+        "SHELL OIL", "ARCO AMPM", "76 STATION", "MOBIL OIL", "EXXON", "VALERO", "TEXACO", "COSTCO GAS", "SAM'S CLUB FUEL",
+        "CIRCLE K FUEL", "SPEEDWAY", "MARATHON PETRO", "BP PRODUCTS", "CONOCO", "SUNOCO", "CITGO",
+        "PHILLIPS 66", "KWIK TRIP", "WAWA FUEL", "SHEETZ FUEL", "LOVES TRAVEL STOP", "PILOT TRAVEL CENTER",
+        "UNION 76", "GETTY", "CASEYS FUEL", "QUIKTRIP FUEL", "THRIFTY OIL", "CHEVRON XTRA MILE",
+    ],
+    "Subscriptions": [
+        "NETFLIX.COM", "SPOTIFY USA", "HULU", "DISNEY PLUS", "APPLE.COM/BILL", "GOOGLE *YOUTUBE PREMIUM",
+        "GOOGLE *GOOGLE ONE", "ICLOUD STORAGE", "OPENAI CHATGPT SUBSCR", "ADOBE CREATIVE CLOUD", "AMAZON PRIME",
+        "DROPBOX", "MICROSOFT 365", "NYTIMES DIGITAL", "AUDIBLE", "PATREON MEMBERSHIP", "DUOLINGO PLUS",
+        "NOTION LABS", "GITHUB COPILOT", "CRUNCHYROLL", "HBO MAX", "PARAMOUNT PLUS", "PEACOCK PREMIUM",
+        "SIRIUSXM", "PANDORA", "MASTERCLASS", "COURSERA PLUS", "LINKEDIN PREMIUM", "CANVA PRO", "FIGMA",
+        "ANTHROPIC CLAUDE", "XBOX GAME PASS", "PLAYSTATION PLUS", "NINTENDO SWITCH ONLINE", "TWITCH SUB",
+        "WASHINGTON POST", "WALL STREET JOURNAL", "MEDIUM MEMBERSHIP", "SUBSTACK", "NORDVPN", "1PASSWORD",
+        "EVERNOTE", "GRAMMARLY", "CHEGG STUDY", "QUIZLET PLUS", "APPLE MUSIC", "TIDAL", "DISCOVERY PLUS",
+    ],
+    "Shopping": [
+        "AMAZON MKTPL", "AMZN MKTP US", "TARGET", "WALMART", "BEST BUY", "IKEA", "NORDSTROM", "MACY'S",
+        "ZARA USA", "H&M", "UNIQLO", "NIKE", "ADIDAS", "APPLE STORE", "HOME DEPOT", "LOWE'S", "BATH & BODY WORKS",
+        "ULTA BEAUTY", "TJ MAXX", "ROSS STORES", "MARSHALLS", "ETSY", "EBAY", "BARNES & NOBLE", "DAISO",
+        "MINISO", "FOREVER 21", "URBAN OUTFITTERS", "LULULEMON", "OLD NAVY", "GAP", "BANANA REPUBLIC",
+        "AMERICAN EAGLE", "ABERCROMBIE & FITCH", "HOLLISTER", "VICTORIA'S SECRET", "SKECHERS", "FOOT LOCKER",
+        "DICK'S SPORTING GOODS", "REI", "MICHAELS", "JOANN FABRICS", "HOBBY LOBBY", "STAPLES", "OFFICE DEPOT",
+        "UCLA BOOKSTORE", "CAMPUS BOOKSTORE", "DOLLAR TREE", "BIG LOTS", "BED BATH & BEYOND", "WAYFAIR",
+        "CRATE & BARREL", "WILLIAMS SONOMA", "POTTERY BARN", "ANTHROPOLOGIE", "FREE PEOPLE", "REFORMATION",
+        "SHEIN", "TEMU", "ALIEXPRESS", "ASOS", "NEW BALANCE", "PUMA", "UNDER ARMOUR", "SAMSUNG STORE",
+        "MICROSOFT STORE", "GAMESTOP", "BLUE NILE", "TIFFANY & CO", "PANDORA JEWELRY", "KAY JEWELERS",
+        "SEPHORA.COM", "GLOSSIER", "BLOOMINGDALE'S", "SAKS FIFTH AVENUE", "NEIMAN MARCUS", "DILLARD'S",
+        "KOHL'S", "JCPENNEY", "BURLINGTON", "FIVE BELOW", "PETCO", "PETSMART", "CHEWY.COM",
+    ],
+    "Rent": [
+        "APARTMENT RENT PAYMENT", "RENT PAYMENT", "PROPERTY MGMT RENT", "AVALONBAY COMMUNITIES", "GREYSTAR RENT",
+        "EQUITY RESIDENTIAL", "IRVINE COMPANY APARTMENT", "RENTCAFE PAYMENT", "APPFOLIO RENT", "ZILLOW RENTAL PAYMENT",
+        "ESSEX PROPERTY TRUST", "CAMDEN LIVING", "UDR APARTMENTS", "MAC APARTMENTS", "LANDLORD RENT",
+        "LEASE PAYMENT", "HOUSING OFFICE RENT", "UNIVERSITY HOUSING PAYMENT", "STUDENT HOUSING PMT",
+        "PROPERTY MANAGEMENT CO", "REALTY RENT", "MOVE IN DEPOSIT APARTMENT",
+    ],
+    "Utilities": [
+        "SOUTHERN CALIF EDISON", "SOCALGAS", "PG&E", "SDG&E", "SPECTRUM INTERNET", "COX COMMUNICATIONS", "AT&T WIRELESS",
+        "VERIZON WIRELESS", "T-MOBILE", "XFINITY", "COMCAST CABLE", "FRONTIER COMMUNICATIONS", "GOOGLE FIBER",
+        "WATER DISTRICT", "IRVINE RANCH WATER", "CITY OF UTILITIES BILL", "ELECTRIC BILL", "GAS & ELECTRIC",
+        "WASTE MANAGEMENT", "REPUBLIC SERVICES", "MINT MOBILE", "VISIBLE WIRELESS", "CRICKET WIRELESS",
+        "BOOST MOBILE", "STRAIGHT TALK", "CONSOLIDATED EDISON", "DUKE ENERGY", "FPL BILL PAY", "CENTERPOINT ENERGY",
+        "CON EDISON", "NATIONAL GRID", "DOMINION ENERGY", "XCEL ENERGY", "PUGET SOUND ENERGY", "SEATTLE CITY LIGHT",
+    ],
+    "Health": [
+        "CVS PHARMACY", "WALGREENS", "RITE AID", "KAISER PERMANENTE", "QUEST DIAGNOSTICS", "LABCORP",
+        "PLANET FITNESS", "24 HOUR FITNESS", "LA FITNESS", "EQUINOX", "ORANGETHEORY", "ANYTIME FITNESS",
+        "CLASSPASS", "PEAR DENTAL", "DENTAL CARE", "FAMILY DENTISTRY", "VISION CENTER", "OPTOMETRY", "LENSCRAFTERS",
+        "WARBY PARKER", "URGENT CARE", "MEDICAL GROUP", "CLINIC COPAY", "PHARMACY RX", "ONE MEDICAL",
+        "TELADOC", "HEALTHCARE PAYMENT", "SUTTER HEALTH", "STANFORD HEALTH CARE", "HOAG HOSPITAL", "UCLA HEALTH",
+        "BLUE SHIELD", "ANTHEM BLUE CROSS", "AETNA", "CIGNA", "DERMATOLOGY ASSOC", "PHYSICAL THERAPY",
+        "THERAPY SESSION", "MINDFUL COUNSELING", "TALKSPACE", "BETTERHELP", "HIMS & HERS", "GNC", "VITAMIN SHOPPE",
+        "YOGA STUDIO", "PILATES STUDIO", "CROSSFIT", "BARRY'S BOOTCAMP", "SOULCYCLE",
+    ],
+    "Entertainment": [
+        "AMC THEATRES", "REGAL CINEMAS", "CINEMARK", "TICKETMASTER", "STEAM GAMES", "PLAYSTATION STORE",
+        "XBOX STORE", "NINTENDO ESHOP", "DAVE & BUSTER'S", "DISNEYLAND", "UNIVERSAL STUDIOS", "STUBHUB",
+        "TOPGOLF", "BOWLERO", "SEAWORLD", "SIX FLAGS", "KNOTT'S BERRY FARM", "LEGOLAND", "MOVIE THEATER",
+        "LIVE NATION", "EVENTBRITE", "SEATGEEK", "VIVID SEATS", "ESCAPE ROOM", "ARCADE", "MINI GOLF",
+        "LASER TAG", "TRAMPOLINE PARK", "MUSEUM ADMISSION", "ZOO TICKETS", "AQUARIUM", "COMEDY CLUB",
+        "CONCERT TICKETS", "THEATER BOX OFFICE", "EPIC GAMES", "BLIZZARD ENTERTAINMENT", "RIOT GAMES",
+        "ROBLOX", "FANDANGO", "ALAMO DRAFTHOUSE", "GOLDEN STATE WARRIORS", "LOS ANGELES DODGERS", "ANGELS STADIUM",
+        "AMUSEMENT PARK", "KARAOKE BOX", "BILLIARDS CLUB", "PICKLEBALL COURT", "RECREATION CENTER",
+    ],
+    "Travel": [
+        "DELTA AIR LINES", "UNITED AIRLINES", "SOUTHWEST AIRLINES", "AMERICAN AIRLINES", "ALASKA AIRLINES",
+        "JETBLUE", "SPIRIT AIRLINES", "FRONTIER AIRLINES", "HAWAIIAN AIRLINES", "AIRBNB", "EXPEDIA", "BOOKING.COM",
+        "MARRIOTT", "HILTON", "HYATT", "HOLIDAY INN", "BEST WESTERN", "SHERATON", "WESTIN", "RADISSON",
+        "HERTZ RENT A CAR", "ENTERPRISE RENT-A-CAR", "AVIS RENT A CAR", "BUDGET RENT A CAR", "KAYAK",
+        "PRICELINE", "HOTELS.COM", "VRBO", "TRAVELOCITY", "ORBITZ", "AIR CANADA", "BRITISH AIRWAYS", "LUFTHANSA",
+        "EMIRATES", "JAPAN AIRLINES", "ANA AIRWAYS", "KOREAN AIR", "ASIANA", "EVA AIR", "CATHAY PACIFIC",
+        "HOSTEL BOOKING", "INN & SUITES", "RESORT & SPA", "MOTEL 6", "SUPER 8", "LA QUINTA", "COMFORT INN",
+        "HAMPTON INN", "FAIRFIELD INN", "COURTYARD MARRIOTT", "RESIDENCE INN", "EMBASSY SUITES", "KIMPTON HOTEL",
+        "GREYHOUND", "FLIXBUS", "TRAVEL INSURANCE", "TSA PRECHECK", "GLOBAL ENTRY", "ESTA APPLICATION",
+        "AIRPORT LOUNGE", "DUTY FREE", "CRUISE LINE", "CARNIVAL CRUISE", "ROYAL CARIBBEAN", "TOUR AGENCY",
+    ],
+    "Income": [
+        "PAYROLL", "DIRECT DEP", "DIRECT DEPOSIT", "SALARY", "ADP PAYROLL", "GUSTO PAYROLL", "PAYCHEX", "WORKDAY PAYROLL",
+        "UNIVERSITY OF CALIFORNIA PAYROLL", "STATE OF CALIFORNIA PAYROLL", "STUDENT EMPLOYMENT PAYROLL",
+        "TAX REFUND IRS TREAS 310", "STATE TAX REFUND", "INTEREST PAYMENT", "INTEREST EARNED", "DIVIDEND PAYMENT",
+        "VENMO CASHOUT", "PAYPAL TRANSFER", "ZELLE PAYMENT FROM", "CASH APP CASHOUT", "STRIPE PAYOUT",
+        "SCHOLARSHIP DISBURSEMENT", "FINANCIAL AID DISBURSEMENT", "STIPEND PAYMENT", "REIMBURSEMENT DEPOSIT",
+        "MOBILE CHECK DEPOSIT", "CASHBACK REWARD", "STATEMENT CREDIT", "TUTORING PAYMENT", "FREELANCE PAYMENT",
+        "UPWORK PAYMENT", "FIVERR PAYOUT", "DOORDASH PAYOUT", "UBER DRIVER PAYOUT", "SOCIAL SECURITY",
+        "UNEMPLOYMENT BENEFITS", "SIGN-ON BONUS", "BONUS PAYMENT", "REFUND CREDIT", "PEER TO PEER RECEIVED",
+    ],
+    "Other": [
+        "ATM WITHDRAWAL", "NON-CHASE ATM FEE", "MONTHLY SERVICE FEE", "OVERDRAFT FEE", "FOREIGN TRANSACTION FEE",
+        "BANK TRANSFER", "ONLINE TRANSFER TO SAVINGS", "ONLINE TRANSFER FROM CHECKING", "CHECK PAID", "WIRE TRANSFER FEE",
+        "USPS", "FEDEX OFFICE", "UPS STORE", "DMV FEE", "COURT FILING FEE", "CITY OF PARKING CITATION",
+        "LIBRARY FINE", "NOTARY SERVICE", "DONATION", "RED CROSS DONATION", "GOFUNDME", "CHURCH OFFERING",
+        "VENMO PAYMENT", "ZELLE PAYMENT TO", "CASH APP PAYMENT", "PAYPAL INST XFER", "UNKNOWN MERCHANT",
+        "PURCHASE", "DEBIT CARD PURCHASE", "POS PURCHASE", "SERVICE CHARGE", "ANNUAL FEE", "LATE FEE",
+        "INTEREST CHARGE", "CREDIT CARD PAYMENT", "PAYMENT THANK YOU", "AUTOPAY PAYMENT", "LOAN PAYMENT",
+        "TUITION PAYMENT", "STUDENT LOAN PAYMENT", "APPLICATION FEE", "TESTING CENTER FEE", "PRINTING SERVICES",
+        "LAUNDROMAT", "DRY CLEANERS", "STORAGE UNIT", "FLORIST", "GIFT SHOP", "BARBER SHOP", "NAIL SALON",
+        "HAIR SALON", "CAR WASH", "LOCKSMITH", "HARDWARE SERVICES", "COPY CENTER", "NOTARY & SHIPPING",
+    ],
+}
+
+# Second batch: broader coverage (boutiques, campus and city services, small food shops, etc.).
+# Written from general knowledge of US spending, not from any one person's statements.
+MORE: dict[str, list[str]] = {
+    "Groceries": ["NATURAL GROCERS", "FRESH MARKET", "EARTH FARE", "MARKET BASKET", "SHOPRITE", "FOOD LION",
+                  "STOP & SHOP", "HARRIS TEETER", "IGA SUPERMARKET", "FARMERS MARKET", "CORNER GROCERY",
+                  "ASIAN SUPERMARKET", "LATINO MARKET", "ORGANIC MARKET", "BUTCHER SHOP", "FISH MARKET",
+                  "BOTTLE SHOP GROCERY", "WEEE GROCERY", "IMPERFECT FOODS", "HELLOFRESH", "BLUE APRON"],
+    "Dining": ["BOBA TEA HOUSE", "BUBBLE TEA", "FROZEN YOGURT SHOP", "GELATO CAFE", "ICE CREAM PARLOR",
+               "CAMPUS DINING", "UNIVERSITY DINING HALL", "FOOD COURT KIOSK", "COFFEE ROASTERS", "ESPRESSO BAR",
+               "JUICE BAR", "SMOOTHIE SHOP", "BAGEL SHOP", "BREAKFAST CAFE", "PIZZERIA", "SANDWICH SHOP",
+               "TACO TRUCK", "FOOD TRUCK", "NOODLE HOUSE", "DUMPLING HOUSE", "SUSHI BAR", "HIBACHI GRILL",
+               "MEDITERRANEAN GRILL", "FALAFEL HOUSE", "BURRITO SHOP", "CREPERIE", "DESSERT CAFE", "MOCHI DONUT",
+               "CHURRO SHOP", "WAFFLE HOUSE", "STEAKHOUSE", "SEAFOOD GRILL", "WINE BAR", "BREWING COMPANY",
+               "SPORTS BAR", "TAPROOM", "DINER", "TAVERN", "BISTRO", "TRATTORIA", "CANTINA", "FRIED CHICKEN SHACK",
+               "GRUBHUB ORDER", "SEAMLESS", "POSTMATES", "CAVIAR DELIVERY", "TOAST TAB", "CLOVER RESTAURANT"],
+    "Transport": ["CAMPUS PARKING PERMIT", "UNIVERSITY PARKING", "PARKING LOT PAYMENT", "METERED PARKING",
+                  "RIDESHARE TRIP", "TAXI CAB", "YELLOW CAB", "SHUTTLE SERVICE", "TRANSIT PASS RELOAD",
+                  "BIKE SHARE", "CITI BIKE", "SCOOTER RENTAL", "CAR WASH & LUBE", "SMOG CHECK", "DRIVING SCHOOL",
+                  "VEHICLE REGISTRATION", "TOWING SERVICE", "AUTO REPAIR", "TIRE SHOP", "BRAKE SERVICE"],
+    "Gas": ["GAS STATION", "FUEL STOP", "PETROL MART", "SELF SERVE FUEL", "TRAVEL CENTER FUEL", "PUMP 07 FUEL",
+            "FUEL & CONVENIENCE", "FUEL PURCHASE", "GASOLINE", "EV CHARGING STATION", "TESLA SUPERCHARGER",
+            "CHARGEPOINT", "ELECTRIFY AMERICA", "EVGO CHARGING"],
+    "Subscriptions": ["MONTHLY MEMBERSHIP", "ANNUAL SUBSCRIPTION", "PREMIUM PLAN RENEWAL", "CLOUD STORAGE PLAN",
+                      "STREAMING SERVICE", "MUSIC STREAMING", "NEWS SUBSCRIPTION", "MAGAZINE SUBSCRIPTION",
+                      "APP STORE SUBSCRIPTION", "GOOGLE PLAY SUBSCRIPTION", "SOFTWARE LICENSE RENEWAL",
+                      "DOMAIN RENEWAL", "WEB HOSTING", "GODADDY", "NAMECHEAP", "SQUARESPACE", "WIX.COM",
+                      "ZOOM VIDEO", "SLACK TECHNOLOGIES", "ATLASSIAN", "JETBRAINS", "DIGITALOCEAN", "HEROKU",
+                      "CHATGPT PLUS", "MIDJOURNEY", "PERPLEXITY PRO", "BUMBLE PREMIUM", "TINDER GOLD", "HINGE PREFERRED"],
+    "Shopping": ["BOUTIQUE", "DESIGNER BOUTIQUE", "FASHION OUTLET", "LUXURY GOODS", "GIFT & NOVELTY", "COMIC BOOK SHOP",
+                 "HOBBY SHOP", "TOY STORE", "BOOKSTORE", "USED BOOKS", "RECORD STORE", "VINTAGE CLOTHING",
+                 "THRIFT STORE", "GOODWILL", "SALVATION ARMY STORE", "SHOE STORE", "JEWELRY STORE", "WATCH SHOP",
+                 "SUNGLASS HUT", "COSMETICS STORE", "PERFUME SHOP", "BEAUTY SUPPLY", "SKINCARE SHOP",
+                 "ELECTRONICS STORE", "PHONE ACCESSORIES", "COMPUTER STORE", "CAMERA SHOP", "FURNITURE STORE",
+                 "HOME GOODS", "KITCHEN STORE", "GARDEN CENTER", "NURSERY & PLANTS", "ART SUPPLY STORE", "CRAFT STORE",
+                 "SPORTING GOODS", "OUTDOOR GEAR", "BIKE SHOP", "MUSIC STORE", "STATIONERY STORE", "PARTY SUPPLY",
+                 "DEPARTMENT STORE", "OUTLET MALL", "VALLEY FAIR MALL", "SHOPPING CENTER", "ONLINE STORE ORDER",
+                 "SHOPIFY ORDER", "TIKTOK SHOP", "DEPOP", "POSHMARK", "THREDUP", "MERCARI", "FARFETCH", "SSENSE",
+                 "NET-A-PORTER", "REVOLVE", "MADEWELL", "J.CREW", "EVERLANE", "ALLBIRDS", "PATAGONIA", "THE NORTH FACE",
+                 "COLUMBIA SPORTSWEAR", "DR. MARTENS", "VANS", "CONVERSE", "COACH OUTLET", "MICHAEL KORS", "KATE SPADE"],
+    "Rent": ["RENT", "MONTHLY RENT", "APT RENT", "RESIDENTIAL LEASE", "HOA DUES", "RENTERS INSURANCE LEMONADE",
+             "PARKING SPACE RENT", "SUBLET PAYMENT", "ROOMMATE RENT SHARE", "HOUSING DEPOSIT"],
+    "Utilities": ["INTERNET SERVICE", "CABLE & INTERNET", "MOBILE PHONE BILL", "CELL PHONE SERVICE", "WIRELESS BILL",
+                  "ELECTRIC UTILITY", "GAS UTILITY", "SEWER & WATER", "TRASH SERVICE", "MUNICIPAL UTILITIES",
+                  "POWER COMPANY", "ENERGY SERVICES", "CITY WATER DEPT", "HOME INTERNET"],
+    "Health": ["MEDICAL CENTER", "PRIMARY CARE", "PEDIATRICS", "OB GYN ASSOCIATES", "RADIOLOGY", "LAB SERVICES",
+               "PHARMACY COPAY", "PRESCRIPTION", "HEALTH CLINIC", "STUDENT HEALTH CENTER", "COUNSELING CENTER",
+               "ACUPUNCTURE", "CHIROPRACTIC", "MASSAGE THERAPY", "WELLNESS SPA", "ORTHODONTICS", "EYE CARE",
+               "HEALTH INSURANCE PREMIUM", "FITNESS CLUB", "GYM MEMBERSHIP", "REC SPORTS", "MARTIAL ARTS STUDIO"],
+    "Entertainment": ["MOVIE TICKETS", "THEATRE TICKETS", "LIVE MUSIC VENUE", "NIGHTCLUB COVER", "BAR COVER CHARGE",
+                      "PARTY TICKETS", "FESTIVAL TICKETS", "THEME PARK TICKETS", "WATER PARK", "ARCADE GAMES",
+                      "BOARD GAME CAFE", "VIDEO GAME PURCHASE", "IN-APP PURCHASE", "STEAMGAMES.COM", "GAME TOP-UP",
+                      "SPORTS TICKETS", "STADIUM CONCESSIONS", "SKI RESORT", "GOLF COURSE", "BOWLING ALLEY",
+                      "ROLLER RINK", "KARAOKE", "PHOTO BOOTH", "ART GALLERY ADMISSION", "BOTANICAL GARDEN"],
+    "Travel": ["AIRLINE TICKET", "AIRFARE", "FLIGHT BOOKING", "HOTEL RESERVATION", "LODGING", "VACATION RENTAL",
+               "CAR RENTAL", "TRAVEL AGENCY", "TOUR BOOKING", "RAILWAY TICKET", "FERRY TICKET", "BAGGAGE FEE",
+               "SEAT SELECTION FEE", "INFLIGHT WIFI", "AIRPORT SHUTTLE", "AIRPORT FOOD", "HOTEL MINIBAR",
+               "RESORT FEE", "CAMPGROUND", "NATIONAL PARK PASS", "TRAVEL BOOKING", "TRIP.COM", "AGODA", "SKYSCANNER",
+               "GOOGLE FLIGHTS", "TRAVELPASS", "RAIL EUROPE", "JR PASS", "OMIO", "KLOOK", "VIATOR", "GETYOURGUIDE"],
+    "Income": ["PAYROLL DEPOSIT", "PAYCHECK", "WAGES", "EMPLOYER DEPOSIT", "SALARY DEPOSIT", "ACH CREDIT PAYROLL",
+               "TAX REFUND", "REFUND", "INSURANCE CLAIM PAYMENT", "RESEARCH ASSISTANT PAYROLL", "TEACHING ASSISTANT PAYROLL",
+               "INTERNSHIP PAYROLL", "CONTRACTOR PAYMENT", "CONSULTING PAYMENT", "GIFT RECEIVED", "ALLOWANCE DEPOSIT",
+               "SAVINGS INTEREST", "DEPOSIT", "ZELLE FROM", "VENMO FROM", "CASH DEPOSIT"],
+    "Other": ["GOVERNMENT SERVICES", "COUNTY FEE", "CITY OF PERMIT FEE", "CITY SERVICES PAYMENT", "PARKING TICKET",
+              "TRAFFIC FINE", "COURT PAYMENT", "UNIVERSITY FEE", "REGISTRAR FEE", "STUDENT SERVICES FEE",
+              "TRANSCRIPT FEE", "BOOK PUBLISHER", "ACADEMIC PUBLISHER", "JOURNAL ACCESS", "SHIPPING", "POSTAGE",
+              "MAIL SERVICES", "PROFESSIONAL SERVICES", "CONSULTING FEE", "MEMBERSHIP DUES", "CLUB DUES",
+              "NONPROFIT DONATION", "CHARITY", "FUNDRAISER", "MISC PAYMENT", "UNCATEGORIZED", "ADJUSTMENT",
+              "CASH ADVANCE", "MONEY ORDER", "CASHIERS CHECK", "BANK FEE", "ACCOUNT MAINTENANCE", "WIRE FEE",
+              "TAX PAYMENT", "PERMIT APPLICATION", "PASSPORT FEE", "VISA APPLICATION FEE", "IMMIGRATION FEE",
+              "TRANSLATION SERVICES", "TUTORING SERVICES", "PHOTO PRINTS", "DRY CLEAN & LAUNDRY", "REPAIR SERVICE"],
+}
+
+
+def with_second_batch() -> dict[str, list[str]]:
+    return {c: MERCHANTS[c] + [n for n in MORE[c] if n not in MERCHANTS[c]] for c in MERCHANTS}
+
+CITIES = ["IRVINE CA", "COSTA MESA CA", "NEWPORT BEACH CA", "SANTA ANA CA", "TUSTIN CA", "LOS ANGELES CA",
+          "SAN DIEGO CA", "SAN JOSE CA", "SANTA CLARA CA", "PALO ALTO CA", "SAN FRANCISCO CA", "OAKLAND CA",
+          "SEATTLE WA", "AUSTIN TX", "NEW YORK NY", "CHICAGO IL", "DENVER CO", "PORTLAND OR", "BOSTON MA"]
+ONLINE_PREFIX_CATEGORIES = {"Subscriptions", "Shopping", "Travel", "Entertainment", "Income", "Other"}
+
+
+def variants(name: str, category: str, rng: random.Random, count: int) -> list[str]:
+    out = []
+    for _ in range(count):
+        city = rng.choice(CITIES)
+        store = rng.randint(10, 99999)
+        phone = f"{rng.randint(200, 999)}-{rng.randint(200, 999)}-{rng.randint(1000, 9999)}"
+        style = rng.randrange(9)
+        if style == 0:
+            text = name
+        elif style == 1:
+            text = f"{name} {city}"
+        elif style == 2:
+            text = f"{name} #{store} {city}"
+        elif style == 3:
+            text = f"{name} {store:05d} {city}"
+        elif style == 4 and category in {"Dining", "Groceries", "Shopping", "Health", "Entertainment"}:
+            text = f"{rng.choice(['SQ *', 'TST* ', 'PY *', 'SP '])}{name} {city}"
+        elif style == 5:
+            text = f"POS DEBIT {name} {city}"
+        elif style == 6:
+            text = f"PURCHASE AUTHORIZED ON {rng.randint(1, 12):02d}/{rng.randint(1, 28):02d} {name} {city}"
+        elif style == 7 and category in ONLINE_PREFIX_CATEGORIES:
+            text = f"{name} {phone} {city[-2:]}"
+        else:
+            text = f"{name} {phone} {city}"
+        out.append(re.sub(r"\s+", " ", text).strip())
+    return out
+
+
+def squash(text: str) -> str:
+    return re.sub(r"[^A-Z0-9]", "", text.upper())
+
+
+def overlaps(labeled_path: str, merchants: dict[str, list[str]]) -> list[tuple[str, str]]:
+    """Seed merchants whose name appears inside any description of your labeled set."""
+    with open(labeled_path, encoding="utf-8-sig", newline="") as handle:
+        descriptions = [squash(row["description"]) for row in csv.DictReader(handle)]
+    found = []
+    for category, names in merchants.items():
+        for name in names:
+            key = squash(name)
+            if len(key) >= 4 and any(key in d for d in descriptions):
+                found.append((category, name))
+    return found
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--out", required=True)
+    parser.add_argument("--per-merchant", type=int, default=8)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--first-batch-only", action="store_true", help="skip the second merchant batch (MORE)")
+    parser.add_argument("--check", help="labeled CSV; exit 1 if any seed merchant appears in it")
+    args = parser.parse_args(argv)
+
+    assert set(MERCHANTS) == CATEGORIES, set(MERCHANTS) ^ CATEGORIES
+    merchants = MERCHANTS if args.first_batch_only else with_second_batch()
+    if args.check:
+        clash = overlaps(args.check, merchants)
+        if clash:
+            print("seed merchants that also appear in your labeled set (remove them):", file=sys.stderr)
+            for category, name in clash:
+                print(f"  {category}: {name}", file=sys.stderr)
+            return 1
+
+    rng = random.Random(args.seed)
+    rows = [(d, category) for category, names in merchants.items()
+            for name in names for d in variants(name, category, rng, args.per_merchant)]
+    with open(args.out, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["description", "category"])
+        writer.writerows(rows)
+    counts = {c: sum(1 for _, k in rows if k == c) for c in sorted(merchants)}
+    print(f"wrote {len(rows)} rows ({sum(len(v) for v in merchants.values())} merchants) to {args.out}")
+    print("per category:", counts)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

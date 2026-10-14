@@ -31,6 +31,11 @@ services:
     build: ./ml
     ports:
       - "8001:8001"
+    environment:
+      MODEL_PATH: /app/models/model.joblib   # optional; without the file the service uses rules only
+      MODEL_THRESHOLD: ${MODEL_THRESHOLD:-0.0}
+    volumes:
+      - ./ml/models:/app/models:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/healthz')"]
       interval: 5s

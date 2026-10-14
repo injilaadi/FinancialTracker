@@ -1,27 +1,31 @@
 """ML service: transaction categorization.
 
-Day 1: serves the keyword rules baseline.
-Day 2: swap in the trained scikit-learn model (TF-IDF + logistic regression),
-keep the rules as a fallback, and report source='model' vs 'rules'.
+Keyword rules first, then the trained scikit-learn model for anything the rules do not
+recognize (see categorizer.py). Without a model file it serves rules only.
+
+Settings (environment): MODEL_PATH (default models/model.joblib), MODEL_THRESHOLD
+(minimum model confidence, default 0.0 = always trust the model for unmatched rows).
 """
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
-from rules import categorize
+from categorizer import Categorizer
 
 app = FastAPI(title="FinancialTracker ML service")
+categorizer = Categorizer.from_env()
 
 
 class CategorizeRequest(BaseModel):
-    # Batch endpoint on purpose: the Go importer sends many rows per call.
+    # Batch endpoint on purpose: the importer sends many rows per call.
     descriptions: list[str] = Field(min_length=1, max_length=1000)
 
 
 class Prediction(BaseModel):
     description: str
     category: str
-    source: str
-    matched: str | None = None
+    source: str  # "rules" or "model"
+    matched: str | None = None  # the rules keyword, when source is "rules" and one matched
+    confidence: float | None = None  # model probability, when the model was consulted
 
 
 class CategorizeResponse(BaseModel):
@@ -29,16 +33,10 @@ class CategorizeResponse(BaseModel):
 
 
 @app.get("/healthz")
-def healthz() -> dict[str, str]:
-    return {"status": "ok"}
+def healthz() -> dict[str, str | bool]:
+    return {"status": "ok", "model_loaded": categorizer.model_loaded}
 
 
 @app.post("/categorize", response_model=CategorizeResponse)
 def categorize_batch(req: CategorizeRequest) -> CategorizeResponse:
-    predictions = []
-    for description in req.descriptions:
-        category, matched = categorize(description)
-        predictions.append(
-            Prediction(description=description, category=category, source="rules", matched=matched)
-        )
-    return CategorizeResponse(predictions=predictions)
+    return CategorizeResponse(predictions=categorizer.predict(req.descriptions))

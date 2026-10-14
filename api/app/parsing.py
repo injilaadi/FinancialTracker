@@ -23,15 +23,46 @@ class CSVFormatError(ValueError):
     """The file as a whole cannot be used (empty, bad encoding, missing columns)."""
 
 
-def parse_date(text: str) -> date:
-    """Accept YYYY-MM-DD and the common US bank formats M/D/YYYY and M/D/YY."""
+_MONTH_DAY_RE = re.compile(r"^(\d{1,2})[/-](\d{1,2})$")
+
+
+def _month_day(month: int, day: int, year: int | None, today: date) -> date:
+    """Resolve a month/day with no year in the statement.
+
+    With an explicit year we use it as is. Without one we assume the most recent
+    matching date that is not in the future, so in January a '12/28' row means last
+    December, not next December.
+    """
+    if year is not None:
+        return date(year, month, day)  # ValueError for impossible dates (e.g. 02/30)
+    for candidate_year in range(today.year, today.year - 5, -1):
+        try:
+            candidate = date(candidate_year, month, day)
+        except ValueError:  # e.g. 02/29 in a non-leap year: try an earlier year
+            continue
+        if candidate <= today:
+            return candidate
+    raise ValueError(f"invalid date {month}/{day}")
+
+
+def parse_date(text: str, year: int | None = None, today: date | None = None) -> date:
+    """Accept YYYY-MM-DD, M/D/YYYY, M/D/YY, and year-less M/D (as on many statements).
+
+    For year-less dates, `year` supplies the year; if omitted it is inferred from `today`.
+    """
     text = text.strip()
     for fmt in DATE_FORMATS:
         try:
             return datetime.strptime(text, fmt).date()
         except ValueError:
             continue
-    raise ValueError(f"unrecognized date {text!r} (use YYYY-MM-DD or M/D/YYYY)")
+    match = _MONTH_DAY_RE.match(text)
+    if match:
+        try:
+            return _month_day(int(match.group(1)), int(match.group(2)), year, today or date.today())
+        except ValueError:
+            raise ValueError(f"invalid date {text!r}") from None
+    raise ValueError(f"unrecognized date {text!r} (use YYYY-MM-DD, M/D/YYYY, or M/D)")
 
 
 def parse_cents(text: str) -> int:
@@ -103,7 +134,9 @@ def map_header(header: list[str]) -> dict[str, int]:
     return index
 
 
-def _build_row(record: list[str], columns: dict[str, int]) -> CsvRow:
+def _build_row(
+    record: list[str], columns: dict[str, int], year: int | None, today: date | None
+) -> CsvRow:
     values: dict[str, str] = {}
     for column in REQUIRED:
         position = columns[column]
@@ -113,14 +146,17 @@ def _build_row(record: list[str], columns: dict[str, int]) -> CsvRow:
     if not values["description"]:
         raise ValueError("empty description")
     return CsvRow(
-        posted_on=parse_date(values["date"]),
+        posted_on=parse_date(values["date"], year, today),
         amount_cents=parse_cents(values["amount"]),
         description=values["description"],
     )
 
 
-def parse_csv(content: bytes) -> ParseResult:
-    """Read a bank-statement CSV. Bad rows are skipped and reported, not fatal."""
+def parse_csv(content: bytes, year: int | None = None, today: date | None = None) -> ParseResult:
+    """Read a bank-statement CSV. Bad rows are skipped and reported, not fatal.
+
+    `year` is used for dates that have no year (e.g. 09/29); `today` exists for tests.
+    """
     try:
         text = content.decode("utf-8-sig")  # also strips a leading byte-order mark
     except UnicodeDecodeError as exc:
@@ -145,7 +181,7 @@ def parse_csv(content: bytes) -> ParseResult:
         if not record:  # blank line
             continue
         try:
-            result.rows.append(_build_row(record, columns))
+            result.rows.append(_build_row(record, columns, year, today))
         except ValueError as exc:
             result.add_error(reader.line_num, str(exc))
     return result

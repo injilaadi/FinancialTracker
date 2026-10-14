@@ -1,0 +1,6 @@
+{
+  "_comment": "Example only. Replace the keys with the exact category names in YOUR downloaded dataset. Categories left out are dropped.",
+  "Restaurants": "Dining",
+  "Groceries": "Groceries",
+  "Gas & Fuel": "Gas"
+}

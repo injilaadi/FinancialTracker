@@ -156,3 +156,17 @@ def test_import_with_no_valid_rows_is_400(client):
 
 def test_import_requires_a_file(client):
     assert client.post("/import").status_code == 422
+
+
+def test_import_month_day_dates_with_year_param(client):
+    csv_bytes = b"date,description,amount\n09/29,SQ *. TUSTIN CA,-5.00\n"
+    response = client.post("/import?year=2025", files={"file": ("s.csv", csv_bytes, "text/csv")})
+    assert response.status_code == 200
+    assert response.json()["imported"] == 1
+    assert client.get("/transactions").json()[0]["posted_on"] == "2025-09-29"
+
+
+def test_import_year_param_validated(client):
+    csv_bytes = b"date,description,amount\n09/29,COFFEE,-5.00\n"
+    response = client.post("/import?year=12", files={"file": ("s.csv", csv_bytes, "text/csv")})
+    assert response.status_code == 422

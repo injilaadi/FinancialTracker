@@ -34,7 +34,7 @@ curl -F file=@sample.csv localhost:8080/import
 curl localhost:8080/transactions
 ```
 
-CSV columns: `date` (YYYY-MM-DD or M/D/YYYY), `description`, `amount` (negative = spending). Common bank header
+CSV columns: `date` (YYYY-MM-DD, M/D/YYYY, or year-less M/D; for M/D pass `?year=2025` to `/import`, otherwise the most recent past date is assumed), `description`, `amount` (negative = spending). Common bank header
 names (`Transaction Date`, `Details`, ...) are accepted. Bad rows are skipped and reported in the response.
 
 Set `IMPORT_WORKERS=4` to categorize import batches concurrently; the import response reports `categorize_ms`.
@@ -45,6 +45,39 @@ Set `IMPORT_WORKERS=4` to categorize import batches concurrently; the import res
 cd ml  && pip install -r requirements-dev.txt && pytest
 cd api && pip install -r requirements-dev.txt && pytest   # integration tests need TEST_DATABASE_URL (a Postgres DB); otherwise they are skipped
 ```
+
+## Train and evaluate the categorizer
+
+```bash
+cd ml && pip install -r requirements-dev.txt
+python eval.py ../data/private/labeled.csv        # rules baseline on your labeled statements
+python train.py --data ../data/public/<dataset>.csv --desc-col "<description column>" \
+    --cat-col "<category column>" --mapping ../data/public/mapping.json \
+    --eval ../data/private/test.csv --out models/model.joblib
+```
+
+`data/seed/seed_merchants.csv` is a hand-written seed set (about 630 US merchants expanded into ~5,000
+statement-style descriptors by `ml/make_seed.py`). Train on it alone with `--seed-data`, or add it to a
+public dataset. Regenerate it with `python make_seed.py --out ../data/seed/seed_merchants.csv --check ../data/private/labeled.csv`;
+`--check` fails if a seed merchant also appears in your labeled test set, so the test stays honest.
+
+`--mapping` maps the public dataset's categories onto ours (see `data/public/mapping.example.json`);
+unmapped categories are dropped. The model never trains on `labeled.csv`.
+
+### Serving the model
+
+The ML service loads `ml/models/model.joblib` if it exists (Compose mounts `ml/models/` read-only) and
+otherwise runs on the keyword rules alone. Order per transaction: a rules keyword match wins; if there is
+none, the model decides when its confidence is at least `MODEL_THRESHOLD` (default `0.0`); anything
+below that becomes `Other`. `GET :8001/healthz` reports `model_loaded`. The model file is git-ignored.
+
+```bash
+cd ml && python train.py --seed-data ../data/seed/seed_merchants.csv \
+    --extra-train ../data/private/dev.csv --eval ../data/private/test.csv   # writes models/model.joblib
+docker compose up --build
+```
+
+Train with the pinned scikit-learn from `requirements.txt`, so the saved model loads inside the container.
 
 ## Results (to be measured)
 

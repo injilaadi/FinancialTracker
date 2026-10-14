@@ -81,3 +81,31 @@ def test_csv_empty_file():
 def test_csv_invalid_encoding():
     with pytest.raises(CSVFormatError):
         parse_csv(bytes([0xFF, 0xFE, 0xFD]))
+
+
+def test_parse_date_month_day_with_explicit_year():
+    assert parse_date("09/29", year=2025) == date(2025, 9, 29)
+    assert parse_date("9-5", year=2025) == date(2025, 9, 5)
+
+
+def test_parse_date_month_day_infers_most_recent_past_date():
+    today = date(2026, 1, 10)
+    assert parse_date("01/05", today=today) == date(2026, 1, 5)
+    assert parse_date("12/28", today=today) == date(2025, 12, 28)  # not next December
+    assert parse_date("01/10", today=today) == date(2026, 1, 10)  # today itself is allowed
+
+
+def test_parse_date_month_day_leap_day_and_invalid():
+    assert parse_date("02/29", today=date(2026, 3, 1)) == date(2024, 2, 29)
+    with pytest.raises(ValueError):
+        parse_date("02/30", year=2025)
+    with pytest.raises(ValueError):
+        parse_date("13/01", year=2025)
+    with pytest.raises(ValueError):
+        parse_date("02/29", year=2025)
+
+
+def test_parse_csv_month_day_dates_use_year():
+    result = parse_csv(b"date,description,amount\n09/29,SQ *. TUSTIN CA,-5.00\n", year=2025)
+    assert result.skipped == 0
+    assert result.rows[0].posted_on == date(2025, 9, 29)

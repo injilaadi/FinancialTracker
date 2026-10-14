@@ -102,14 +102,18 @@ async def list_transactions(request: Request, limit: int = Query(50, ge=1, le=50
 
 
 @app.post("/import")
-async def import_csv(request: Request, file: UploadFile = File(...)):
+async def import_csv(
+    request: Request,
+    file: UploadFile = File(...),
+    year: int | None = Query(None, ge=1990, le=2100, description="Year for dates written as MM/DD"),
+):
     settings = request.app.state.settings
 
     content = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="file too large (max 10 MB)")
     try:
-        parsed = parse_csv(content)
+        parsed = parse_csv(content, year=year)
     except CSVFormatError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     if not parsed.rows:
