@@ -24,10 +24,9 @@ CREATE TABLE IF NOT EXISTS transactions (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- NOTE (deliberate): no secondary indexes on transactions yet.
--- Day 2 measures dashboard queries on ~1M rows BEFORE and AFTER adding
---   CREATE INDEX ... ON transactions (posted_on, category_id);
--- so keep this table index-free until you have the "before" timings.
+-- NOTE (deliberate): this file creates the transactions table WITHOUT secondary indexes.
+-- db/indexes.sql and db/matview.sql add them (Compose loads them right after this file), and
+-- db/bench/run_benchmark.py applies them one at a time to measure before/after timings.
 
 CREATE TABLE IF NOT EXISTS budgets (
     id          SERIAL PRIMARY KEY,

@@ -68,6 +68,23 @@ jobs:
           python3 -c "import json; d = json.load(open('/tmp/import.json')); assert d['imported'] == 2 and d['categorized'] == 2, d"
           curl --fail -s http://localhost:8080/transactions | python3 -c "import json, sys; t = json.load(sys.stdin); assert {x['category'] for x in t} == {'Gas', 'Dining'}, t"
 
+      - name: Monthly summary works (materialized view loaded by init scripts)
+        run: |
+          curl --fail -s "http://localhost:8080/summary/monthly?months=60" | tee /tmp/summary.json
+          python3 -c "import json; r = json.load(open('/tmp/summary.json')); assert sorted(x['category'] for x in r) == ['Dining', 'Gas'], r; assert sum(x['spent_cents'] for x in r) == 5825, r"
+
+      - name: Redis cache serves the second summary request and writes invalidate it
+        run: |
+          first=$(curl -si "http://localhost:8080/summary/monthly?months=60" | grep -i '^x-cache' | tr -d '\r')
+          second=$(curl -si "http://localhost:8080/summary/monthly?months=60" | grep -i '^x-cache' | tr -d '\r')
+          echo "first: $first / second: $second"
+          echo "$second" | grep -qi 'HIT'
+          curl --fail -s -X POST http://localhost:8080/transactions -H 'content-type: application/json' \
+            -d '{"posted_on":"2026-10-03","amount_cents":-100,"description":"CACHE TEST"}' > /dev/null
+          third=$(curl -si "http://localhost:8080/summary/monthly?months=60" | grep -i '^x-cache' | tr -d '\r')
+          echo "after write: $third"
+          echo "$third" | grep -qi 'MISS'
+
       - name: Dump logs on failure
         if: failure()
         run: docker compose logs --no-color

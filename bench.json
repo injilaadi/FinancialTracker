@@ -1,0 +1,131 @@
+{
+  "postgres": "16.15 (Debian 16.15-1.pgdg13+2)",
+  "cpus": 10,
+  "rows": 1000000,
+  "runs": 7,
+  "results": {
+    "q1_monthly_by_category": {
+      "baseline": {
+        "median_ms": 21.968,
+        "min_ms": 20.32,
+        "max_ms": 47.422,
+        "plan": [
+          "Aggregate",
+          "Gather Merge",
+          "Aggregate",
+          "Sort",
+          "Hash Join",
+          "Seq Scan",
+          "Hash",
+          "Seq Scan"
+        ]
+      },
+      "indexed": {
+        "median_ms": 3.923,
+        "min_ms": 3.779,
+        "max_ms": 4.293,
+        "plan": [
+          "Aggregate",
+          "Sort",
+          "Hash Join",
+          "Index Only Scan on idx_transactions_account_posted",
+          "Hash",
+          "Seq Scan"
+        ]
+      },
+      "matview": {
+        "median_ms": 0.059,
+        "min_ms": 0.054,
+        "max_ms": 0.064,
+        "plan": [
+          "Sort",
+          "Hash Join",
+          "Bitmap Heap Scan",
+          "Bitmap Index Scan on idx_monthly_category_spend_key",
+          "Hash",
+          "Seq Scan"
+        ]
+      }
+    },
+    "q2_recent_transactions": {
+      "baseline": {
+        "median_ms": 20.229,
+        "min_ms": 19.969,
+        "max_ms": 23.017,
+        "plan": [
+          "Limit",
+          "Gather Merge",
+          "Sort",
+          "Hash Join",
+          "Seq Scan",
+          "Hash",
+          "Seq Scan"
+        ]
+      },
+      "indexed": {
+        "median_ms": 0.035,
+        "min_ms": 0.031,
+        "max_ms": 0.038,
+        "plan": [
+          "Limit",
+          "Nested Loop",
+          "Index Scan on idx_transactions_account_posted",
+          "Memoize",
+          "Index Scan on categories_pkey"
+        ]
+      }
+    },
+    "q3_top_categories_one_month": {
+      "baseline": {
+        "median_ms": 18.015,
+        "min_ms": 17.555,
+        "max_ms": 19.192,
+        "plan": [
+          "Sort",
+          "Aggregate",
+          "Gather Merge",
+          "Aggregate",
+          "Sort",
+          "Hash Join",
+          "Seq Scan",
+          "Hash",
+          "Seq Scan"
+        ]
+      },
+      "indexed": {
+        "median_ms": 0.163,
+        "min_ms": 0.157,
+        "max_ms": 0.205,
+        "plan": [
+          "Sort",
+          "Aggregate",
+          "Hash Join",
+          "Index Only Scan on idx_transactions_account_posted",
+          "Hash",
+          "Seq Scan"
+        ]
+      },
+      "matview": {
+        "median_ms": 0.012,
+        "min_ms": 0.009,
+        "max_ms": 0.012,
+        "plan": [
+          "Sort",
+          "Hash Join",
+          "Index Scan on idx_monthly_category_spend_key",
+          "Hash",
+          "Seq Scan"
+        ]
+      }
+    }
+  },
+  "index_build_s": 0.44373387505766004,
+  "matview_build_s": 0.1331384590594098,
+  "matview_refresh_s": 0.1342756669037044,
+  "sizes": {
+    "table_mb": 90,
+    "index_mb": 47,
+    "matview_rows": 15600,
+    "matview_kb": 1528
+  }
+}

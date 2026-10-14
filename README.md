@@ -79,22 +79,56 @@ docker compose up --build
 
 Train with the pinned scikit-learn from `requirements.txt`, so the saved model loads inside the container.
 
+## SQL and performance
+
+`db/init.sql` creates the tables with no secondary indexes on purpose. `db/indexes.sql` adds one covering
+index, and `db/matview.sql` adds a pre-aggregated `monthly_category_spend` view (Compose loads all three on
+first start; the API refreshes the view after writes and serves it at `GET /summary/monthly?months=12`).
+The dashboard queries are in `db/bench/queries.sql`.
+
+To measure before/after on 1M synthetic rows (throwaway database, never touches your data):
+
+```bash
+docker compose up -d db
+pip install asyncpg
+python db/bench/run_benchmark.py --admin-url postgres://postgres:postgres@localhost:5432/postgres \
+    --rows 1000000 --runs 7 --out bench.json
+```
+
+Timings are server-side `EXPLAIN (ANALYZE)` execution times (median of N runs). They depend on your hardware,
+so quote your own run. Trade-off: the view is only as fresh as its last refresh, and the index costs disk and
+write time (the script prints both).
+
+## Redis cache
+
+`GET /summary/monthly` is cached in Redis (`api/app/cache.py`). One key per window (`summary:monthly:{months}`),
+5-minute TTL (`CACHE_TTL_SECONDS`). Every write (import, new transaction) refreshes the materialized view and
+then deletes the cached windows, so a reader never sees data older than the last write. Redis is optional:
+if it is down or unset the API serves straight from Postgres (`X-Cache: BYPASS`/`MISS`), and after a Redis
+error it skips the cache for 10 seconds instead of timing out on every request. Turn it off with
+`CACHE_ENABLED=false`. The `X-Cache` response header shows `HIT`, `MISS` or `BYPASS`.
+
+Measure it (run twice against the same data, once with `CACHE_ENABLED=false`):
+
+```bash
+python api/bench_summary.py --url http://localhost:8080 --requests 500 --months 12
+```
+
 ## Results (to be measured)
 
-| Metric | Result |
-|---|---|
-| Categorizer F1 vs rules baseline, on my own labeled statements | TBD |
-| Import throughput, 1 worker vs N workers | TBD |
-| Dashboard query time before/after index + materialized view (1M rows) | TBD |
-| Dashboard latency with/without Redis | TBD |
+| query | baseline | + index | + materialized view |
+|---|---:|---:|---:|
+| q1_monthly_by_category | 21.97 | 3.92 (5.6x) | 0.06 (372x) |
+| q2_recent_transactions | 20.23 | 0.04 (578.0x) | n/a |
+| q3_top_categories_one_month | 18.02 | 0.16 (110.5x) | 0.01 (1501x) |
 
 ## Roadmap
 
 - [x] Schema, Compose stack, FastAPI api skeleton, CSV import, ML service with rules baseline, CI
-- [ ] Hand-labeled test set (kept private) and baseline measurement
-- [ ] scikit-learn categorizer (TF-IDF + logistic regression) trained on a public dataset
-- [ ] Hand-written analytics SQL, indexes, materialized view, `EXPLAIN ANALYZE` timings
-- [ ] Redis cache for dashboard aggregates
+- [x] Hand-labeled test set (kept private) and baseline measurement
+- [x] scikit-learn categorizer (TF-IDF + logistic regression) trained on a public dataset
+- [x] Hand-written analytics SQL, indexes, materialized view, `EXPLAIN ANALYZE` timings
+- [x] Redis cache for dashboard aggregates
 - [ ] React + TypeScript dashboard
 - [ ] Stretch: forecasting, PyTorch categorizer comparison, Kubernetes (Helm, HPA)
 

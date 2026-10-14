@@ -8,10 +8,11 @@ from datetime import date
 
 import asyncpg
 import httpx
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
+from app.cache import SummaryCache
 from app.config import load_settings
 from app.ml_client import categorize_all
 from app.parsing import CSVFormatError, parse_csv
@@ -29,15 +30,37 @@ async def lifespan(app: FastAPI):
     # A pool keeps several connections open and reuses them across requests.
     app.state.pool = await asyncpg.create_pool(settings.database_url, min_size=1, max_size=10)
     app.state.http = httpx.AsyncClient(timeout=15.0)
-    logger.info("api started (ml=%r, import workers=%d)", settings.ml_url, settings.import_workers)
+    app.state.cache = (
+        SummaryCache.from_url(settings.redis_url, settings.cache_ttl_seconds)
+        if settings.redis_url and settings.cache_enabled
+        else None
+    )
+    logger.info("api started (ml=%r, import workers=%d, cache=%s)",
+                settings.ml_url, settings.import_workers, "on" if app.state.cache else "off")
     try:
         yield
     finally:
+        if app.state.cache is not None:
+            await app.state.cache.close()
         await app.state.http.aclose()
         await app.state.pool.close()
 
 
 app = FastAPI(title="FinancialTracker API", lifespan=lifespan)
+
+
+async def refresh_summary(state) -> None:
+    """Rebuild the monthly summary after data changes. CONCURRENTLY: readers are not blocked.
+
+    The summary is a materialized view (db/matview.sql), so it is only as fresh as the last
+    refresh. A failed refresh must not fail the write that triggered it.
+    """
+    try:
+        await state.pool.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY monthly_category_spend")
+    except Exception:  # noqa: BLE001
+        logger.warning("could not refresh monthly_category_spend", exc_info=True)
+    if state.cache is not None:
+        await state.cache.invalidate()  # after the refresh, so a reader cannot re-cache old data
 
 
 @app.get("/healthz")
@@ -84,6 +107,7 @@ async def create_transaction(body: TransactionIn, request: Request) -> dict[str,
         body.amount_cents,
         body.description,
     )
+    await refresh_summary(request.app.state)
     return {"id": row["id"]}
 
 
@@ -99,6 +123,46 @@ async def list_transactions(request: Request, limit: int = Query(50, ge=1, le=50
         limit,
     )
     return [dict(row) for row in rows]
+
+
+class MonthlySpend(BaseModel):
+    month: str  # "YYYY-MM"
+    category: str | None  # None = uncategorized
+    spent_cents: int
+    transaction_count: int
+
+
+@app.get("/summary/monthly", response_model=list[MonthlySpend])
+async def monthly_summary(request: Request, response: Response, months: int = Query(12, ge=1, le=60)):
+    """Spending (money out) per month and category for the last `months` months.
+
+    Read from the pre-aggregated monthly_category_spend view, so it stays fast on millions of rows.
+    Cached in Redis when configured; the X-Cache header says HIT, MISS, or BYPASS (no cache).
+    """
+    cache = request.app.state.cache
+    if cache is not None:
+        cached = await cache.get(months)
+        if cached is not None:
+            response.headers["X-Cache"] = "HIT"
+            return cached
+    response.headers["X-Cache"] = "MISS" if cache is not None else "BYPASS"
+    try:
+        rows = await request.app.state.pool.fetch(
+            """SELECT to_char(m.month, 'YYYY-MM') AS month, c.name AS category,
+                      m.spent_cents::bigint AS spent_cents, m.transaction_count::int AS transaction_count
+               FROM monthly_category_spend m
+               LEFT JOIN categories c ON c.id = m.category_id
+               WHERE m.account_id = (SELECT id FROM accounts ORDER BY id LIMIT 1)
+                 AND m.month >= (date_trunc('month', current_date) - make_interval(months => $1::int - 1))::date
+               ORDER BY m.month, c.name""",
+            months,
+        )
+    except asyncpg.UndefinedTableError:
+        raise HTTPException(status_code=503, detail="summary view missing; apply db/matview.sql") from None
+    payload = [dict(row) for row in rows]
+    if cache is not None:
+        await cache.set(months, payload)
+    return payload
 
 
 @app.post("/import")
@@ -165,6 +229,8 @@ async def import_csv(
             records=records,
             columns=["account_id", "posted_on", "amount_cents", "description", "category_id", "category_source"],
         )
+
+    await refresh_summary(request.app.state)
 
     response = {
         "imported": len(records),
