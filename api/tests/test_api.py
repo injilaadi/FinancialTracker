@@ -259,3 +259,30 @@ def test_summary_still_works_when_redis_is_down(client):
     server.connected = False
     response = client.get("/summary/monthly")
     assert response.status_code == 200 and response.json()[0]["spent_cents"] == 750
+
+
+def test_daily_summary_groups_by_day_and_ignores_income_and_other_months(client):
+    for posted_on, cents, description in [
+        ("2026-09-03", -1000, "A"), ("2026-09-03", -250, "B"), ("2026-09-20", -400, "C"),
+        ("2026-09-20", 99900, "PAYROLL"),            # income: not spending
+        ("2026-08-31", -777, "LAST MONTH"), ("2026-10-01", -888, "NEXT MONTH"),
+    ]:
+        assert client.post("/transactions", json={"posted_on": posted_on, "amount_cents": cents,
+                                                  "description": description}).status_code == 201
+    body = client.get("/summary/daily?month=2026-09").json()
+    assert body == [
+        {"date": "2026-09-03", "spent_cents": 1250, "transaction_count": 2},
+        {"date": "2026-09-20", "spent_cents": 400, "transaction_count": 1},
+    ]
+
+
+def test_daily_summary_december_and_empty_month(client):
+    client.post("/transactions", json={"posted_on": "2026-12-31", "amount_cents": -500, "description": "NYE"})
+    assert [r["date"] for r in client.get("/summary/daily?month=2026-12").json()] == ["2026-12-31"]
+    assert client.get("/summary/daily?month=2020-02").json() == []
+
+
+def test_daily_summary_validates_month(client):
+    assert client.get("/summary/daily").status_code == 422
+    for bad in ("2026-13", "2026-9", "september", "2026-00"):
+        assert client.get(f"/summary/daily?month={bad}").status_code == 422

@@ -69,5 +69,12 @@ services:
       ml:
         condition: service_healthy
 
+  web:
+    build: ./web
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+
 volumes:
   pgdata:

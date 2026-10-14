@@ -165,6 +165,34 @@ async def monthly_summary(request: Request, response: Response, months: int = Qu
     return payload
 
 
+class DailySpend(BaseModel):
+    date: str  # "YYYY-MM-DD"
+    spent_cents: int
+    transaction_count: int
+
+
+@app.get("/summary/daily", response_model=list[DailySpend])
+async def daily_summary(request: Request, month: str = Query(..., pattern=r"^\d{4}-(0[1-9]|1[0-2])$")):
+    """Spending (money out) per day for one month, e.g. month=2026-09. Days with no spending are omitted.
+
+    Uses the (account_id, posted_on) index on transactions, so it reads only that month's rows.
+    """
+    year, month_number = int(month[:4]), int(month[5:])
+    start = date(year, month_number, 1)
+    end = date(year + 1, 1, 1) if month_number == 12 else date(year, month_number + 1, 1)
+    rows = await request.app.state.pool.fetch(
+        """SELECT posted_on::text AS date, sum(-amount_cents)::bigint AS spent_cents,
+                  count(*)::int AS transaction_count
+           FROM transactions
+           WHERE account_id = (SELECT id FROM accounts ORDER BY id LIMIT 1)
+             AND amount_cents < 0 AND posted_on >= $1 AND posted_on < $2
+           GROUP BY posted_on ORDER BY posted_on""",
+        start,
+        end,
+    )
+    return [dict(row) for row in rows]
+
+
 @app.post("/import")
 async def import_csv(
     request: Request,

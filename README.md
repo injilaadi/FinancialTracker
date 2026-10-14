@@ -122,6 +122,22 @@ python api/bench_summary.py --url http://localhost:8080 --requests 500 --months 
 | q2_recent_transactions | 20.23 | 0.04 (578.0x) | n/a |
 | q3_top_categories_one_month | 18.02 | 0.16 (110.5x) | 0.01 (1501x) |
 
+## Dashboard
+
+A React + TypeScript dashboard in `web/` shows the selected month's total, a cumulative spending line against
+last month, spending by category, recent transactions, and a CSV import dialog.
+
+```bash
+docker compose up --build      # then open http://localhost:3000
+# or, for development with hot reload (API must be running on :8080):
+cd web && npm ci && npm run dev
+```
+
+The browser only talks to `/api/*`. In Docker, nginx forwards that to the `api` service; in `npm run dev`,
+Vite does (set `API_URL` to point somewhere other than `http://localhost:8080`). Charts are hand-written SVG,
+every chart has a table view, and light and dark themes follow your system setting. Category colors are fixed per
+category, so switching months doesn't repaint them.
+
 ## Roadmap
 
 - [x] Schema, Compose stack, FastAPI api skeleton, CSV import, ML service with rules baseline, CI
@@ -129,7 +145,7 @@ python api/bench_summary.py --url http://localhost:8080 --requests 500 --months 
 - [x] scikit-learn categorizer (TF-IDF + logistic regression) trained on a public dataset
 - [x] Hand-written analytics SQL, indexes, materialized view, `EXPLAIN ANALYZE` timings
 - [x] Redis cache for dashboard aggregates
-- [ ] React + TypeScript dashboard
+- [x] React + TypeScript dashboard
 - [ ] Stretch: forecasting, PyTorch categorizer comparison, Kubernetes (Helm, HPA)
 
 ## Data and privacy
